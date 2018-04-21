@@ -131,7 +131,7 @@ def sample(preds, temperature=1.0):
 	preds = exp_preds / np.sum(exp_preds)
 	probas = np.random.multinomial(1, preds, 1)
 	sortd = np.argsort(probas)[0][::-1]
-	return sortd[0:20]
+	return sortd[0:200]
 
 # 학습시키고 텍스트 생성하기 반복
 
@@ -152,6 +152,7 @@ generated += sentence
 print('--- 시드 = "' + sentence + '"')
 sys.stdout.write(generated)
 
+model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
 # 시드를 기반으로 텍스트 자동 생성
 for i in range(1600):
 	x = np.zeros((1, maxlen, len(chars)))

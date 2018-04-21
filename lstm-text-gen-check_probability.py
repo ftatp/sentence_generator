@@ -78,6 +78,10 @@ conn.close()
 text = text_decomposed
 
 consonant = ['ㄱ', 'ㄴ', 'ㄷ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅅ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ', 'ㄲ', 'ㄸ', 'ㅃ', 'ㅆ', 'ㅉ']
+vowel = ['ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅠ', 'ㅡ', 'ㅢ', 'ㅣ']
+end_sound = ['ㄳ', 'ㄵ', 'ㄶ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅄ']
+numbers = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+eos = ['.', ',']
 
 #fp = codecs.open("./BEXX0003.txt", "r", encoding="utf-16")
 #soup = BeautifulSoup(fp, "html.parser")
@@ -93,7 +97,8 @@ char_indices = dict((c, i) for i, c in enumerate(chars)) # 문자 → ID
 indices_char = dict((i, c) for i, c in enumerate(chars)) # ID → 문자
 # 텍스트를 maxlen개의 문자로 자르고 다음에 오는 문자 등록하기
 
-seed = hgtk.text.decompose("나는 아침밥을 혼자 먹었다")
+seed_undecomposed = "나는 아침밥을 혼자 먹었다"
+seed = hgtk.text.decompose(seed_undecomposed)
 
 maxlen = len(seed)
 step = 12
@@ -123,7 +128,6 @@ model.add(Activation('softmax'))
 optimizer = RMSprop(lr=0.01)
 
 
-
 # 후보를 배열에서 꺼내기
 def sample(preds, temperature=1.0):
 	preds = np.asarray(preds).astype('float64')
@@ -132,7 +136,73 @@ def sample(preds, temperature=1.0):
 	preds = exp_preds / np.sum(exp_preds)
 	probas = np.random.multinomial(1, preds, 1)
 	sortd = np.argsort(probas)[0][::-1]
-	return sortd[0:5]
+	return sortd[0:100]
+
+# 다음 글자 찾기
+error_failure = 0
+def find_next_char(collection, tmp_sentence):
+	#########################Pattern############################
+	#	
+	#The letter must be composed in one of the two orders
+	## -1. 'ᴥ'/' ' + consonant + vowel + 'ᴥ'/' ' 
+	## -2. 'ᴥ'/' ' + consonant + vowel + consonant + 'ᴥ'/' '
+	#
+	############################################################
+
+	# if the last character in sentence is
+	last_char = tmp_sentence[len(tmp_sentence) - 1]
+	breakflag = False
+	# space
+	if last_char == ' ':
+		for char, proba in collection:
+			if char in consonant:
+				next_char = char
+				breakflag = True
+				break
+	# end of syllable
+	elif last_char == 'ᴥ':
+		for char, proba in collection:
+			if char in consonant + eos:
+				next_char = char
+				breakflag = True
+				break
+	# end sound
+	elif last_char in end_sound:
+		for char, proba in collection:
+			if char in [' ', 'ᴥ']:
+				next_char = char
+				breakflag = True
+				break
+	# vowel
+	elif last_char in vowel:
+		for char, proba in collection:
+			if char in consonant + end_sound + eos + [' ', 'ᴥ']:
+				next_char = char
+				breakflag = True
+				break
+	# consonant
+	elif last_char in consonant:
+		if tmp_sentence[len(tmp_sentence) - 2] in vowel:
+			for char, proba in collection:
+				if char in [' ', 'ᴥ']:
+					next_char = char
+					breakflag = True
+					break
+		else:
+			for char, proba in collection:
+				if char in vowel:
+					next_char = char
+					breakflag = True
+					break
+
+	else: #fail to get next char
+		tmp_sentence = sentence
+		next_char = collection[0][0]
+
+	if breakflag == False:
+		error_failure += 1
+	return next_char
+
 
 model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
 # 학습시키고 텍스트 생성하기 반복
@@ -151,7 +221,14 @@ for iteration in range(1, 60):
 	print('--- 다양성 = ', )
 
 	generated = ''
-	sentence = seed #text[start_index: start_index + maxlen]
+	syll_end = (seed.rfind(' '), seed.rfind('ᴥ'))[seed.rfind(' ') < seed.rfind('ᴥ')]
+	sentence = seed[:syll_end]
+	if seed[len(seed) - 1] in eos:
+		sentence += seed[len(seed) - 1])
+
+	tmp_sentence = seed
+	tmp_syllable = seed[syll_end:]
+
 	generated += sentence
 	print('--- 시드 = "' + sentence + '"')
 	#sys.stdout.write(generated)
@@ -159,54 +236,23 @@ for iteration in range(1, 60):
 	# 시드를 기반으로 텍스트 자동 생성
 	for i in range(1600):
 		x = np.zeros((1, maxlen, len(chars)))
-		for t, char in enumerate(sentence):
+		for t, char in enumerate(tmp_sentence):
 			x[0, t, char_indices[char]] = 1.
 
 		# 다음에 올 문자를 예측하기
 		preds = model.predict(x, verbose=0)[0]
 		next_indice = sample(preds)
 
-		collection = []
+		predict_collection = []
 		for index in next_indice:
-			collection.append((indices_char[index], preds[index]))
+			predict_collection.append((indices_char[index], preds[index]))
 		#print(collection)
 
-
-		#Pattern
-		#The letter must be composed in one of the two orders
-		## -1. 'ᴥ'/' ' + consonant + vowel + 'ᴥ'/' ' 
-		## -2. 'ᴥ'/' ' + consonant + vowel + consonant + 'ᴥ'/' '
-		############################################################
-		
-		# if the last character in sentence is
-		last_char = sentence[len(sentence) - 1]
-
-		# blank
-		if last_char == ' ' or last_char == 'ᴥ':
-			breakflag = False
-			for char, proba in collection:
-				if char in consonant:
-					next_char = char
-					breakflag = True
-					break
-			
-			if breakflag is False:
-				next_char = collection[0][0]
-				#next_char = indices_char[next_index]
-
-		# consonant
-		#elif last_char in consonant:
-			
-		# vowel
-
-		else:
-			next_char = collection[0][0]
-
-		
+		next_char = find_next_char(predict_collection, tmp_sentence)
 
 		# 출력하기
 		generated += next_char
-		sentence = sentence[1:] + next_char
+		tmp_sentence = tmp_sentence[1:] + next_char
 		#sys.stdout.write(next_char)
 		sys.stdout.flush()
 
